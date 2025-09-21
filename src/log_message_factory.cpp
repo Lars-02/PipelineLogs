@@ -115,9 +115,9 @@ optional<LogMessage> LogMessageFactory::createFromStream(std::ifstream &input, s
     // Parse next_id (multi-line, until next log starts)
     string next_id;
 
-    auto isHeaderLine = [](const string &l) -> bool
+    auto isHeaderLine = [](const string &line) -> bool
     {
-        stringstream ss(l);
+        stringstream ss(line);
         string first;
         ss >> first;
         return !first.empty(); // any non-empty line could start a new log
