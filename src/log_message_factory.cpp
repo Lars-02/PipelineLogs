@@ -4,13 +4,7 @@
 #include <iostream>
 #include <vector>
 #include <optional>
-
-using std::getline;
-using std::nullopt;
-using std::optional;
-using std::string;
-using std::stringstream;
-using std::vector;
+#include <unordered_set>
 
 optional<LogMessage> LogMessageFactory::createFromStream(std::ifstream &input, size_t &lineNumber,
                                                          string &pipeline_id)
@@ -19,13 +13,17 @@ optional<LogMessage> LogMessageFactory::createFromStream(std::ifstream &input, s
     vector<string> headerTokens;
     bool bodyStarted = false;
     string bodyBuffer;
+    unordered_set<size_t> usedLines; // track lines already consumed
 
     // Collect header tokens (pipeline_id, id, encoding)
     while (headerTokens.size() < 3)
     {
         if (!getline(input, line))
-            return nullopt; // EOF without a complete message
+            return nullopt;
         ++lineNumber;
+
+        if (usedLines.count(lineNumber))
+            continue;
 
         if (line.empty())
             continue;
@@ -47,6 +45,8 @@ optional<LogMessage> LogMessageFactory::createFromStream(std::ifstream &input, s
             bodyStarted = true;
             bodyBuffer = line.substr(openPos + 1);
         }
+
+        usedLines.insert(lineNumber);
     }
 
     // headerTokens now has at least 3 tokens
@@ -74,6 +74,8 @@ optional<LogMessage> LogMessageFactory::createFromStream(std::ifstream &input, s
                 return nullopt;
             }
             ++lineNumber;
+            if (usedLines.count(lineNumber))
+                continue;
             if (line.empty())
                 continue;
             size_t openPos = line.find('[');
@@ -81,9 +83,10 @@ optional<LogMessage> LogMessageFactory::createFromStream(std::ifstream &input, s
             {
                 bodyStarted = true;
                 bodyBuffer = line.substr(openPos + 1);
+                usedLines.insert(lineNumber);
                 break;
             }
-            // otherwise keep searching
+            usedLines.insert(lineNumber);
         }
     }
 
@@ -97,37 +100,66 @@ optional<LogMessage> LogMessageFactory::createFromStream(std::ifstream &input, s
             return nullopt;
         }
         ++lineNumber;
+        if (usedLines.count(lineNumber))
+            continue;
         if (!bodyBuffer.empty())
             bodyBuffer += "\n";
         bodyBuffer += line;
+        usedLines.insert(lineNumber);
         closePos = bodyBuffer.find(']');
     }
 
     string rawBody = bodyBuffer.substr(0, closePos);
     string afterBody = bodyBuffer.substr(closePos + 1);
 
-    // Parse next_id (may be on same line or subsequent lines)
+    // Parse next_id (multi-line, until next log starts)
     string next_id;
+
+    auto isHeaderLine = [](const string &l) -> bool
     {
-        stringstream ss(afterBody);
-        if (!(ss >> next_id))
+        stringstream ss(l);
+        string first;
+        ss >> first;
+        return !first.empty(); // any non-empty line could start a new log
+    };
+
+    // Collect token(s) from same line after body
+    stringstream ss(afterBody);
+    string token;
+    while (ss >> token)
+        next_id += token;
+
+    // Collect next lines until we see a new header
+    streampos lastPos = input.tellg();
+    while (true)
+    {
+        lastPos = input.tellg();
+        if (!getline(input, line))
+            break;
+        ++lineNumber;
+        if (usedLines.count(lineNumber))
+            continue;
+        if (line.empty())
+            continue;
+        // check if line is a new log header (first token + second token + encoding)
+        stringstream test(line);
+        string t1, t2, t3;
+        test >> t1 >> t2 >> t3;
+        if (!t1.empty() && !t2.empty() && !t3.empty())
         {
-            // read more lines until we get a non-empty token to use as next_id
-            while (true)
-            {
-                if (!getline(input, line))
-                {
-                    cerr << "Line " << lineNumber << ": Warning: missing next_id for pipeline " << pipeline_id << ", message " << msg_id << "\n";
-                    return nullopt;
-                }
-                ++lineNumber;
-                stringstream ss2(line);
-                if (ss2 >> next_id)
-                    break;
-            }
+            // new header line; rewind stream for next message
+            input.seekg(lastPos);
+            --lineNumber;
+            break;
         }
+        // otherwise, this line is part of the next_id
+        stringstream ss2(line);
+        while (ss2 >> token)
+            next_id += token;
+
+        usedLines.insert(lineNumber);
     }
 
     string decoded = LogMessage::decodeBody(rawBody, encoding);
-    return LogMessage(msg_id, encoding, decoded, next_id);
+    return LogMessage(msg_id, encoding, decoded, next_id.empty() ? "-1" : next_id);
 }

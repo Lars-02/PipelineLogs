@@ -4,6 +4,8 @@
 #include <vector>
 #include "map"
 #include <string>
+#include "unordered_map"
+#include "log_message.hpp"
 
 using namespace std;
 
@@ -14,30 +16,7 @@ public:
 
     static string input();
 
-    void render() const;
-
-    string log_name;
-
-    static Renderer &instance();
-
-    Renderer(const Renderer &) = delete;
-
-    Renderer(Renderer &&) = delete;
-
-    Renderer &operator=(const Renderer &) = delete;
-
-    Renderer &operator=(Renderer &&) = delete;
-
-private:
-    static void log(const string &string);
-
-    static void printLog(const string &string);
-
-    static string getLogName();
-
-    static Renderer _instance;
-
-    Renderer();
+    static void render(const string &pipeline_id, const unordered_map<string, LogMessage> &messages);
 };
 
 #endif // PIPELINE_RENDERER_HPP

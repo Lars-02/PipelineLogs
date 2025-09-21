@@ -2,6 +2,7 @@
 #include <filesystem>
 #include "log_message_factory.hpp"
 #include "log_message.hpp"
+#include "renderer.hpp"
 
 using namespace std;
 namespace fs = std::filesystem;
@@ -38,80 +39,41 @@ PipelineMap readLogFile(const fs::path &filePath, vector<string> &pipelineOrder)
     return pipelines;
 }
 
-void printPipeline(const string &pipeline_id, const unordered_map<string, LogMessage> &messages)
-{
-    cout << "Pipeline " << pipeline_id << "\n";
-
-    string tail;
-    for (const auto &[id, msg] : messages)
-    {
-        if (msg.getNextId() == "-1")
-        {
-            tail = id;
-            break;
-        }
-    }
-
-    if (tail.empty())
-    {
-        unordered_set<string> referenced;
-        for (const auto &[id, msg] : messages)
-            if (msg.getNextId() != "-1")
-                referenced.insert(msg.getNextId());
-
-        for (const auto &[id, msg] : messages)
-            if (!referenced.count(id))
-            {
-                tail = id;
-                break;
-            }
-    }
-
-    if (tail.empty())
-    {
-        cerr << "Warning: pipeline " << pipeline_id << " has no terminating message\n";
-        return;
-    }
-
-    // Build reverse (next -> current)
-    unordered_map<string, string> prev;
-    for (const auto &[id, msg] : messages)
-    {
-        if (msg.getNextId() != "-1" && messages.count(msg.getNextId()))
-            prev[msg.getNextId()] = id;
-    }
-
-    vector<pair<string, string>> ordered;
-    string cur = tail;
-    while (!cur.empty() && messages.count(cur))
-    {
-        const auto &msg = messages.at(cur);
-        ordered.push_back({msg.getId(), msg.getBody()});
-        cur = prev.count(cur) ? prev[cur] : "";
-    }
-
-    for (auto &[id, body] : ordered)
-        cout << "\t" << id << "| " << body << "\n";
-}
-
 void processFile(const fs::path &filePath)
 {
     vector<string> pipelineOrder;
     PipelineMap pipelines = readLogFile(filePath, pipelineOrder);
 
     for (const auto &pipeline_id : pipelineOrder)
-        printPipeline(pipeline_id, pipelines[pipeline_id]);
+        Renderer::render(pipeline_id, pipelines[pipeline_id]);
 }
 
-int main()
+std::vector<fs::directory_entry> getFilesInFolder(const std::string &folder)
 {
-    string folder = "input/";
-    vector<fs::directory_entry> files;
+    std::vector<fs::directory_entry> files;
 
     for (auto &entry : fs::directory_iterator(folder))
         if (entry.is_regular_file())
             files.push_back(entry);
 
+    if (files.empty())
+    {
+        std::cerr << "No files found in folder " << folder << "\n";
+        return {};
+    }
+
+    // Sort files alphabetically by file name
+    std::sort(files.begin(), files.end(), [](const fs::directory_entry &a, const fs::directory_entry &b)
+              { return a.path().filename().string() < b.path().filename().string(); });
+
+    return files;
+}
+
+int main()
+{
+    const std::string folder = "input/";
+    auto files = getFilesInFolder(folder);
+    bool again = false;
     if (files.empty())
     {
         cerr << "No files found in folder " << folder << "\n";
@@ -120,19 +82,22 @@ int main()
 
     while (true)
     {
+        if (again)
+            Renderer::clear();
         cout << "\nSelect a log file to process:\n";
         for (size_t i = 0; i < files.size(); ++i)
             cout << i << ": " << files[i].path().filename() << "\n";
         cout << "q: Quit program\n";
 
         string inputStr;
-        size_t choice;
+        size_t choice = 0;
         bool valid = false;
 
         while (!valid)
         {
+
             cout << "Enter choice: ";
-            cin >> inputStr;
+            inputStr = Renderer::input();
 
             if (inputStr == "q" || inputStr == "Q")
                 return 0;
@@ -147,18 +112,17 @@ int main()
             }
             catch (...)
             {
-                cout << "Invalid input. Enter a number or 'q' to quit.\n";
+                cout << "Invalid input. Enter a valid number or 'q' to quit.\n";
             }
         }
 
         processFile(files[choice].path());
 
         cout << "\nDo you want to process another file? [Y/n]: ";
-        string again;
-        cin.ignore();
-        getline(cin, again);
-        if (!again.empty() && (again[0] == 'n' || again[0] == 'N'))
-            break;
+        string againInput = Renderer::input();
+        again = againInput.empty() || (againInput[0] != 'n' && againInput[0] != 'N');
+        if (!again)
+            return 0;
     }
 
     return 0;
